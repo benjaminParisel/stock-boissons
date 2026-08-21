@@ -89,14 +89,16 @@
 <script>
 // ─────────────────────────────────────────────────────────
 // 🔒 PROTECTION D'ACCÈS PAR PARAMÈTRE D'URL
-// Changez cette clé, puis partagez l'URL sous la forme :
+// Clé injectée au moment du service par la Cloudflare Pages
+// Function (_worker.js) depuis la variable d'environnement
+// ACCESS_KEY du projet Cloudflare. Partagez l'URL sous la forme :
 //   https://votre-site.pages.dev/?acces=VOTRE_CLE
 // (à encoder dans le QR code). Sans ce paramètre exact, la
 // page reste bloquée. ⚠️ Protection légère (côté navigateur) :
 // suffisant pour éviter que la page traîne publiquement, mais
 // pas un vrai système de sécurité (la clé est visible dans le
 // code source de la page).
-const ACCESS_KEY = "bcg2026";
+const ACCESS_KEY = "__ACCESS_KEY__";
 // ─────────────────────────────────────────────────────────
 
 const urlParams = new URLSearchParams(window.location.search);

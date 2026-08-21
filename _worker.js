@@ -6,7 +6,9 @@ export default {
     }
     const res = await env.ASSETS.fetch(request);
     const html = await res.text();
-    const replaced = html.replace("__APPS_SCRIPT_URL__", env.APPS_SCRIPT_URL || "");
+    const replaced = html
+      .replace("__APPS_SCRIPT_URL__", env.APPS_SCRIPT_URL || "")
+      .replace("__ACCESS_KEY__", env.ACCESS_KEY || "");
     return new Response(replaced, res);
   },
 };
