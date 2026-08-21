@@ -1,0 +1,307 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<meta name="robots" content="noindex, nofollow, noarchive">
+<title>BCG — Mouvements Buvette</title>
+<link rel="icon" type="image/png" href="logo.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Archivo+Black&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<div id="lockedScreen" class="locked-screen" style="display:none">
+  <div class="locked-box">
+    <h1>Accès restreint</h1>
+    <p>Cette page nécessite un lien d'accès valide.<br>Scannez le QR code fourni par votre équipe.</p>
+  </div>
+</div>
+
+<div id="appRoot" style="display:none">
+
+<header>
+  <div class="header-row">
+  <div class="brand">
+    <img class="logo" src="logo.png" alt="Logo BCG">
+    <div>
+      <h1>BCG — Mouvements Buvette</h1>
+      <div class="sub" id="lastUpdate">Prêt — cliquez sur + ou − pour préparer une saisie</div>
+    </div>
+  </div>
+    <button id="helpBtn" class="help-btn" aria-label="Aide">?</button>
+  </div>
+</header>
+
+<div class="modal-overlay" id="helpOverlay" style="display:none">
+  <div class="modal">
+    <div class="modal-header">
+      <h2>Comment ça marche</h2>
+      <button id="closeHelpBtn" class="modal-close" aria-label="Fermer">✕</button>
+    </div>
+    <div class="modal-body">
+      <p>Cette page sert à signaler chaque <strong>entrée</strong> ou <strong>sortie</strong> de boisson, pour que le stock du Google Sheet reste à jour.</p>
+      <ul>
+        <li><strong>Équipe / pôle</strong> : indiquez qui fait la saisie (ex : IC, Animation…). C'est obligatoire pour pouvoir enregistrer.</li>
+        <li><strong>Commentaire</strong> : facultatif, pour préciser un contexte (ex : réassort avant match).</li>
+        <li><strong>Sortie d'une boisson</strong> : cliquez sur <strong>−</strong> sur la ligne correspondante. Si vous sortez 1 Cola, la ligne Cola doit afficher <strong>-1</strong> avant d'enregistrer.</li>
+        <li><strong>Entrée d'une boisson</strong> (réassort) : cliquez sur <strong>+</strong> sur la ligne correspondante.</li>
+        <li>Vous pouvez ajuster plusieurs boissons avant d'enregistrer : rien n'est envoyé tant que vous n'avez pas cliqué sur <strong>Enregistrer</strong>.</li>
+        <li><strong>Enregistrer</strong> envoie tous les mouvements en attente en une seule fois dans le Google Sheet.</li>
+        <li><strong>Annuler</strong> remet tous les compteurs à zéro sans rien envoyer.</li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+
+<div class="status" id="status"></div>
+
+<div class="meta">
+  <label>
+    Équipe
+    <input type="text" id="equipeInput" placeholder="ex : BCG 6" />
+  </label>
+  <label>
+    Commentaire <span class="optional">(optionnel)</span>
+    <input type="text" id="commentaireInput" placeholder="ex : IC J1" />
+  </label>
+</div>
+
+<main id="cards">
+  <!-- cartes générées en JS -->
+</main>
+
+<div class="journal">
+  <h2>Derniers mouvements enregistrés</h2>
+  <div class="ticket" id="ticket"><div class="empty">—</div></div>
+</div>
+
+<div class="savebar">
+  <div class="count" id="pendingCount">Aucun mouvement en attente</div>
+  <button class="cancel" id="cancelBtn">Annuler</button>
+  <button class="save" id="saveBtn" disabled>💾 Enregistrer</button>
+</div>
+
+</div><!-- /appRoot -->
+
+<script>
+// ─────────────────────────────────────────────────────────
+// 🔒 PROTECTION D'ACCÈS PAR PARAMÈTRE D'URL
+// Changez cette clé, puis partagez l'URL sous la forme :
+//   https://votre-site.pages.dev/?acces=VOTRE_CLE
+// (à encoder dans le QR code). Sans ce paramètre exact, la
+// page reste bloquée. ⚠️ Protection légère (côté navigateur) :
+// suffisant pour éviter que la page traîne publiquement, mais
+// pas un vrai système de sécurité (la clé est visible dans le
+// code source de la page).
+const ACCESS_KEY = "bcg2026";
+// ─────────────────────────────────────────────────────────
+
+const urlParams = new URLSearchParams(window.location.search);
+const providedKey = urlParams.get('acces');
+
+if (providedKey === ACCESS_KEY) {
+  document.getElementById('appRoot').style.display = '';
+} else {
+  document.getElementById('lockedScreen').style.display = 'flex';
+}
+// ─────────────────────────────────────────────────────────
+// URL de l'Apps Script, injectée au moment du service par la
+// Cloudflare Pages Function (_worker.js) depuis la variable
+// d'environnement APPS_SCRIPT_URL du projet Cloudflare.
+// En local (sans Functions), ce placeholder reste tel quel et
+// checkSetup() affiche le message de configuration manquante.
+const APPS_SCRIPT_URL = "__APPS_SCRIPT_URL__";
+// ─────────────────────────────────────────────────────────
+
+const DRINKS = [
+  'Fanta orange', 'Cola', 'Ice tea', 'Jus de pommes',
+  'Limonade', 'Citronade', 'Bières 75cl', 'Bières canettes'
+];
+
+// pending[nom] = mouvement net en attente (positif = entrée, négatif = sortie)
+// Cette page ne connaît AUCUN total de stock : uniquement les mouvements
+// que l'utilisateur est en train de préparer, pas encore envoyés au Sheet.
+let pending = {};
+DRINKS.forEach(name => pending[name] = 0);
+
+const STEP = 1; // chaque clic bouge le mouvement de 1
+let journal = []; // historique local des mouvements déjà enregistrés (pour affichage uniquement)
+
+const $cards = document.getElementById('cards');
+const $status = document.getElementById('status');
+const $lastUpdate = document.getElementById('lastUpdate');
+const $ticket = document.getElementById('ticket');
+const $setupNotice = document.getElementById('setupNotice');
+const $saveBtn = document.getElementById('saveBtn');
+const $cancelBtn = document.getElementById('cancelBtn');
+const $pendingCount = document.getElementById('pendingCount');
+const $equipeInput = document.getElementById('equipeInput');
+const $commentaireInput = document.getElementById('commentaireInput');
+const $helpBtn = document.getElementById('helpBtn');
+const $closeHelpBtn = document.getElementById('closeHelpBtn');
+const $helpOverlay = document.getElementById('helpOverlay');
+
+$helpBtn.addEventListener('click', () => { $helpOverlay.style.display = 'flex'; });
+$closeHelpBtn.addEventListener('click', () => { $helpOverlay.style.display = 'none'; });
+$helpOverlay.addEventListener('click', (e) => {
+  if (e.target === $helpOverlay) $helpOverlay.style.display = 'none';
+});
+
+function checkSetup() {
+  if (!APPS_SCRIPT_URL || APPS_SCRIPT_URL.includes('COLLEZ_ICI') || APPS_SCRIPT_URL.includes('__APPS_SCRIPT_URL__')) {
+    if ($setupNotice) $setupNotice.style.display = 'block';
+    return false;
+  }
+  return true;
+}
+
+function setStatus(msg, type) {
+  $status.textContent = msg;
+  $status.className = 'status' + (type ? ' ' + type : '');
+  if (type === 'ok') setTimeout(() => { if ($status.textContent === msg) $status.textContent = ''; }, 2500);
+}
+
+function getPendingList() {
+  return DRINKS.filter(name => pending[name] !== 0);
+}
+
+function updateSaveBar() {
+  const list = getPendingList();
+  const equipeFilled = $equipeInput.value.trim().length > 0;
+  $equipeInput.classList.toggle('missing', list.length > 0 && !equipeFilled);
+
+  if (list.length === 0) {
+    $pendingCount.textContent = 'Aucun mouvement en attente';
+    $saveBtn.disabled = true;
+    $cancelBtn.style.visibility = 'hidden';
+  } else if (!equipeFilled) {
+    $pendingCount.textContent = list.length + ' boisson' + (list.length > 1 ? 's' : '') + ' — indiquez l’équipe pour enregistrer';
+    $saveBtn.disabled = true;
+    $cancelBtn.style.visibility = 'visible';
+  } else {
+    $pendingCount.textContent = list.length + ' boisson' + (list.length > 1 ? 's' : '') + ' à enregistrer';
+    $saveBtn.disabled = false;
+    $cancelBtn.style.visibility = 'visible';
+  }
+}
+
+async function apiBatch(changes, equipe, commentaire) {
+  const res = await fetch(APPS_SCRIPT_URL, {
+    method: 'POST',
+    // text/plain évite le pre-flight CORS que Apps Script ne gère pas
+    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+    body: JSON.stringify({ action: 'batch', changes, equipe, commentaire })
+  });
+  const data = await res.json();
+  if (data.error) throw new Error(data.error);
+  return data;
+}
+
+function renderCards() {
+  $cards.innerHTML = '';
+  DRINKS.forEach(name => {
+    const val = pending[name];
+    let cls = '';
+    if (val > 0) cls = 'entree';
+    else if (val < 0) cls = 'sortie';
+    const label = val === 0 ? '—' : (val > 0 ? '+' + val : val);
+    const card = document.createElement('div');
+    card.className = 'card' + (cls ? ' ' + cls : '');
+    card.innerHTML = `
+      <button class="btn minus" data-name="${name}" aria-label="Sortie">−</button>
+      <div class="name">${name}</div>
+      <div class="pending">${label}</div>
+      <button class="btn plus" data-name="${name}" aria-label="Entrée">+</button>
+    `;
+    $cards.appendChild(card);
+  });
+  updateSaveBar();
+}
+
+function renderTicket() {
+  if (journal.length === 0) {
+    $ticket.innerHTML = '<div class="empty">Aucun mouvement enregistré pour l’instant</div>';
+    return;
+  }
+  $ticket.innerHTML = journal.slice(-15).reverse().map(entry => {
+    const cls = entry.delta > 0 ? 'entree' : 'sortie';
+    const sign = entry.delta > 0 ? '+' + entry.delta : entry.delta;
+    const time = new Date(entry.ts).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
+    return `<div class="row"><span>${time} — ${entry.name}</span><span class="delta ${cls}">${sign}</span></div>`;
+  }).join('');
+}
+
+function adjustPending(name, delta) {
+  pending[name] = (pending[name] || 0) + delta;
+  renderCards();
+  setStatus('Mouvement en attente — cliquez sur Enregistrer', 'dirty');
+}
+
+async function saveAll() {
+  const list = getPendingList();
+  const equipe = $equipeInput.value.trim();
+  if (list.length === 0 || !equipe) return;
+  const commentaire = $commentaireInput.value.trim();
+  const changes = list.map(name => ({ drink: name, delta: pending[name] }));
+
+  $saveBtn.disabled = true;
+  $saveBtn.textContent = 'Enregistrement…';
+  setStatus('Enregistrement dans le Google Sheet…', '');
+
+  try {
+    await apiBatch(changes, equipe, commentaire);
+    changes.forEach(c => journal.push({ ts: Date.now(), name: c.drink, delta: c.delta }));
+    DRINKS.forEach(name => pending[name] = 0);
+    $commentaireInput.value = ''; // l'équipe reste pré-remplie pour la suite de la session
+    renderCards();
+    renderTicket();
+    $lastUpdate.textContent = 'Dernière sauvegarde à ' + new Date().toLocaleTimeString('fr-FR');
+    setStatus('Enregistré ✓', 'ok');
+  } catch (err) {
+    setStatus('Échec de l’enregistrement : ' + err.message, 'error');
+  } finally {
+    $saveBtn.textContent = '💾 Enregistrer';
+    updateSaveBar();
+  }
+}
+
+function cancelAll() {
+  DRINKS.forEach(name => pending[name] = 0);
+  renderCards();
+  setStatus('Mouvements en attente annulés', '');
+}
+
+$cards.addEventListener('click', (e) => {
+  const btn = e.target.closest('.btn');
+  if (!btn) return;
+  const name = btn.dataset.name;
+  const delta = btn.classList.contains('plus') ? STEP : -STEP;
+  adjustPending(name, delta);
+});
+
+$equipeInput.addEventListener('input', updateSaveBar);
+
+$saveBtn.addEventListener('click', saveAll);
+$cancelBtn.addEventListener('click', cancelAll);
+
+// avertit avant de fermer/quitter l'onglet s'il y a des mouvements non enregistrés
+window.addEventListener('beforeunload', (e) => {
+  if (getPendingList().length > 0) {
+    e.preventDefault();
+    e.returnValue = '';
+  }
+});
+
+if (providedKey === ACCESS_KEY) {
+  checkSetup();
+  renderCards();
+  renderTicket();
+  updateSaveBar();
+}
+</script>
+
+</body>
+</html>
